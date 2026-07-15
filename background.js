@@ -196,18 +196,36 @@ async function handleTabUrl(tabId, url) {
   }
 
   if (session.lockMode === "hard") {
-    const redirectTarget = lastAcceptableUrl || buildFallbackUrl(session.domainWhitelist);
-    if (redirectTarget && redirectTarget !== url) {
-      try {
-        await chrome.tabs.update(tabId, { url: redirectTarget });
-        lastAcceptableUrl = redirectTarget;
-      } catch (err) {
-        // Tab may no longer exist; ignore.
-      }
-    } else if (!redirectTarget) {
-      console.warn(
-        "Focus Tracker: hard lock triggered but domainWhitelist has no usable entries to redirect to."
+    // Don't touch the offending tab itself — leave its URL alone and just
+    // switch focus away from it (like Ctrl+Tab), so it's still open but not
+    // what the user is looking at.
+    try {
+      const tabs = await chrome.tabs.query({});
+      const regulatedTab = tabs.find(
+        (t) =>
+          t.id !== tabId &&
+          t.url &&
+          /^https?:\/\//i.test(t.url) &&
+          isWhitelisted(t.url, session.domainWhitelist)
       );
+
+      if (regulatedTab) {
+        await chrome.tabs.update(regulatedTab.id, { active: true });
+        await chrome.windows.update(regulatedTab.windowId, { focused: true });
+        lastAcceptableUrl = regulatedTab.url;
+      } else {
+        const fallback = buildFallbackUrl(session.domainWhitelist);
+        if (fallback) {
+          await chrome.tabs.create({ url: fallback, active: true });
+          lastAcceptableUrl = fallback;
+        } else {
+          console.warn(
+            "Focus Tracker: hard lock triggered but domainWhitelist has no usable entries to open."
+          );
+        }
+      }
+    } catch (err) {
+      // Tab or window may no longer exist; ignore.
     }
     return;
   }
@@ -337,6 +355,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           "Focus Tracker: could not reach desktop app to end session.",
           err
         );
+        sendResponse({ ok: false, error: String(err) });
+      }
+    })();
+    return true;
+  }
+
+  if (message?.type === "addWhitelistDomain") {
+    (async () => {
+      const { domain, reason } = message.payload || {};
+      if (!domain || !domain.trim() || !reason || !reason.trim()) {
+        sendResponse({ ok: false, error: "domain and reason are both required" });
+        return;
+      }
+      try {
+        const data = await apiFetch("/whitelist/domains/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ domain: domain.trim(), reason: reason.trim() }),
+        });
+        sendResponse({ ok: true, domainWhitelist: data.domainWhitelist });
+      } catch (err) {
+        console.warn("Focus Tracker: could not add domain to whitelist.", err);
         sendResponse({ ok: false, error: String(err) });
       }
     })();
