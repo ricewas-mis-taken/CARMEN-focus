@@ -1,6 +1,11 @@
 // Focus Tracker background service worker (MV3)
+//
+// Session state (active/inactive, lock mode, duration, whitelists, violation
+// count) lives in the desktop app, not chrome.storage.local. This service
+// worker only keeps `lastAcceptableUrl` in memory, since it's a per-tab-check
+// bookkeeping detail the desktop API has no endpoint to store.
 
-const STORAGE_KEY = "focusSession";
+const API_BASE = "http://127.0.0.1:5847";
 const ALARM_NAME = "focusSessionEnd";
 
 function defaultSession() {
@@ -8,24 +13,52 @@ function defaultSession() {
     isActive: false,
     endTime: 0,
     lockMode: "soft",
-    whitelist: [],
+    domainWhitelist: [],
+    processWhitelist: [],
     lastAcceptableUrl: "",
     violationCount: 0,
   };
 }
 
+let lastAcceptableUrl = "";
+
+async function apiFetch(path, options) {
+  const res = await fetch(`${API_BASE}${path}`, options);
+  if (!res.ok) {
+    throw new Error(`Desktop API ${path} responded with ${res.status}`);
+  }
+  return res.json();
+}
+
+// Epoch-ms timestamps are ~13 digits; epoch-seconds are ~10. Normalize
+// defensively since the desktop app's units for end_time aren't pinned down
+// here — if this guess is wrong, fix it in this one spot.
+function normalizeEndTime(value) {
+  if (!value) return 0;
+  return value < 1e12 ? value * 1000 : value;
+}
+
 async function getSession() {
-  const data = await chrome.storage.local.get(STORAGE_KEY);
-  return data[STORAGE_KEY] || defaultSession();
-}
-
-async function setSession(session) {
-  await chrome.storage.local.set({ [STORAGE_KEY]: session });
-}
-
-async function clearSession() {
-  await setSession(defaultSession());
-  await chrome.alarms.clear(ALARM_NAME);
+  try {
+    const data = await apiFetch("/status", { method: "GET" });
+    return {
+      isActive: !!data.active,
+      endTime: normalizeEndTime(data.end_time),
+      lockMode: data.lock_mode || "soft",
+      domainWhitelist: data.domain_whitelist || [],
+      processWhitelist: data.process_whitelist || [],
+      violationCount: data.violation_count || 0,
+      lastAcceptableUrl,
+    };
+  } catch (err) {
+    console.warn(
+      "Focus Tracker: could not reach desktop app at",
+      API_BASE,
+      "- treating session as inactive.",
+      err
+    );
+    return defaultSession();
+  }
 }
 
 function isWhitelisted(url, whitelist) {
@@ -61,19 +94,18 @@ async function handleTabUrl(tabId, url) {
   const session = await getSession();
   if (!session.isActive) return;
 
-  if (isWhitelisted(url, session.whitelist)) {
-    session.lastAcceptableUrl = url;
-    await setSession(session);
+  if (isWhitelisted(url, session.domainWhitelist)) {
+    lastAcceptableUrl = url;
     return;
   }
 
-  session.violationCount += 1;
-  await setSession(session);
+  // Violation counting itself is owned by the desktop app (see /status);
+  // the extension has no endpoint to report this violation upstream.
 
   if (session.lockMode === "hard") {
-    if (session.lastAcceptableUrl && session.lastAcceptableUrl !== url) {
+    if (lastAcceptableUrl && lastAcceptableUrl !== url) {
       try {
-        await chrome.tabs.update(tabId, { url: session.lastAcceptableUrl });
+        await chrome.tabs.update(tabId, { url: lastAcceptableUrl });
       } catch (err) {
         // Tab may no longer exist; ignore.
       }
@@ -120,17 +152,25 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === ALARM_NAME) {
-    await clearSession();
+    lastAcceptableUrl = "";
+    try {
+      await apiFetch("/session/end", { method: "POST" });
+    } catch (err) {
+      console.warn(
+        "Focus Tracker: could not reach desktop app to end session.",
+        err
+      );
+    }
   }
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "startSession") {
     (async () => {
-      const { durationMinutes, lockMode, whitelist } = message.payload;
-      const endTime = Date.now() + durationMinutes * 60 * 1000;
+      const { durationMinutes, lockMode, domainWhitelist, processWhitelist } =
+        message.payload;
 
-      let lastAcceptableUrl = "";
+      let seedUrl = "";
       try {
         const [activeTab] = await chrome.tabs.query({
           active: true,
@@ -139,36 +179,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Only seed lastAcceptableUrl if the starting tab is actually
         // whitelisted — otherwise hard-lock has nowhere safe to redirect to
         // and can loop between two non-whitelisted tabs.
-        if (activeTab?.url && isWhitelisted(activeTab.url, whitelist)) {
-          lastAcceptableUrl = activeTab.url;
+        if (activeTab?.url && isWhitelisted(activeTab.url, domainWhitelist)) {
+          seedUrl = activeTab.url;
         }
       } catch (err) {
         // Ignore.
       }
+      lastAcceptableUrl = seedUrl;
 
-      const session = {
-        isActive: true,
-        endTime,
-        lockMode,
-        whitelist,
-        lastAcceptableUrl,
-        violationCount: 0,
-      };
-      await setSession(session);
-      lastHandledUrlByTab.clear();
+      try {
+        const data = await apiFetch("/session/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            duration_minutes: durationMinutes,
+            lock_mode: lockMode,
+            domain_whitelist: domainWhitelist,
+            process_whitelist: processWhitelist,
+          }),
+        });
 
-      await chrome.alarms.clear(ALARM_NAME);
-      chrome.alarms.create(ALARM_NAME, { when: endTime });
+        lastHandledUrlByTab.clear();
+        const endTime =
+          normalizeEndTime(data.end_time) ||
+          Date.now() + durationMinutes * 60 * 1000;
+        await chrome.alarms.clear(ALARM_NAME);
+        chrome.alarms.create(ALARM_NAME, { when: endTime });
 
-      sendResponse({ ok: true, session });
+        sendResponse({ ok: true });
+      } catch (err) {
+        console.warn(
+          "Focus Tracker: could not reach desktop app to start session.",
+          err
+        );
+        sendResponse({ ok: false, error: String(err) });
+      }
     })();
     return true;
   }
 
   if (message?.type === "endSession") {
     (async () => {
-      await clearSession();
-      sendResponse({ ok: true });
+      lastAcceptableUrl = "";
+      await chrome.alarms.clear(ALARM_NAME);
+      try {
+        await apiFetch("/session/end", { method: "POST" });
+        sendResponse({ ok: true });
+      } catch (err) {
+        console.warn(
+          "Focus Tracker: could not reach desktop app to end session.",
+          err
+        );
+        sendResponse({ ok: false, error: String(err) });
+      }
     })();
     return true;
   }

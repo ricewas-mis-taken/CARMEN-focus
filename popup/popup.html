@@ -45,13 +45,23 @@
         </div>
 
         <div class="field">
-          <label for="whitelist">Acceptable tabs</label>
+          <label for="whitelist">Websites</label>
           <textarea
             id="whitelist"
-            rows="4"
+            rows="3"
             placeholder="github.com&#10;docs.google.com&#10;stackoverflow.com"
           ></textarea>
           <span class="hint">One domain or URL substring per line.</span>
+        </div>
+
+        <div class="field">
+          <label for="process-whitelist">Apps</label>
+          <textarea
+            id="process-whitelist"
+            rows="3"
+            placeholder="Code.exe&#10;firefox.exe"
+          ></textarea>
+          <span class="hint">One process name per line.</span>
         </div>
 
         <button type="button" id="start-btn" class="primary-btn">

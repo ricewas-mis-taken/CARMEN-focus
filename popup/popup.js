@@ -6,6 +6,7 @@ const customMinutesInput = document.getElementById("custom-minutes");
 const lockSoftBtn = document.getElementById("lock-soft");
 const lockHardBtn = document.getElementById("lock-hard");
 const whitelistTextarea = document.getElementById("whitelist");
+const processWhitelistTextarea = document.getElementById("process-whitelist");
 const startBtn = document.getElementById("start-btn");
 
 const countdownEl = document.getElementById("countdown");
@@ -16,6 +17,7 @@ const nuclearBtn = document.getElementById("nuclear-btn");
 let selectedMinutes = null;
 let selectedLockMode = "soft";
 let countdownInterval = null;
+let statusPollInterval = null;
 
 presetButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -51,28 +53,43 @@ startBtn.addEventListener("click", () => {
     return;
   }
 
-  const whitelist = whitelistTextarea.value
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  const parseLines = (value) =>
+    value
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
 
+  const domainWhitelist = parseLines(whitelistTextarea.value);
+  const processWhitelist = parseLines(processWhitelistTextarea.value);
+
+  startBtn.disabled = true;
   chrome.runtime.sendMessage(
     {
       type: "startSession",
       payload: {
         durationMinutes,
         lockMode: selectedLockMode,
-        whitelist,
+        domainWhitelist,
+        processWhitelist,
       },
     },
-    () => {
-      window.close();
+    (response) => {
+      startBtn.disabled = false;
+      if (response?.ok) {
+        window.close();
+      } else {
+        startBtn.textContent = "Desktop app unreachable — try again";
+        setTimeout(() => {
+          startBtn.textContent = "Start Focus Session";
+        }, 2500);
+      }
     }
   );
 });
 
 nuclearBtn.addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "endSession" }, () => {
+    stopStatusPoll();
     stopCountdown();
     showSetupView();
   });
@@ -128,11 +145,25 @@ function renderActiveSession(session) {
   startCountdown(session.endTime);
 }
 
-chrome.runtime.sendMessage({ type: "getStatus" }, (response) => {
-  const session = response?.session;
-  if (session?.isActive) {
-    renderActiveSession(session);
-  } else {
-    showSetupView();
+function stopStatusPoll() {
+  if (statusPollInterval) {
+    clearInterval(statusPollInterval);
+    statusPollInterval = null;
   }
-});
+}
+
+function refreshStatus() {
+  chrome.runtime.sendMessage({ type: "getStatus" }, (response) => {
+    const session = response?.session;
+    if (session?.isActive) {
+      renderActiveSession(session);
+    } else {
+      stopStatusPoll();
+      stopCountdown();
+      showSetupView();
+    }
+  });
+}
+
+refreshStatus();
+statusPollInterval = setInterval(refreshStatus, 3000);
