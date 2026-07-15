@@ -75,6 +75,30 @@
           <ul class="allowed-sites" id="allowed-sites"></ul>
         </div>
 
+        <div class="field">
+          <label for="add-site-input">Add a site</label>
+          <div class="add-site-row">
+            <input type="text" id="add-site-input" placeholder="e.g. wikipedia.org" />
+            <button type="button" id="add-site-btn" class="secondary-btn">Add</button>
+          </div>
+          <div id="add-site-reason-row" class="hidden">
+            <textarea
+              id="add-site-reason"
+              rows="2"
+              placeholder="Why do you need this site right now?"
+            ></textarea>
+            <div class="add-site-actions">
+              <button type="button" id="add-site-cancel-btn" class="ghost-btn">
+                Cancel
+              </button>
+              <button type="button" id="add-site-submit-btn" class="secondary-btn">
+                Submit reason
+              </button>
+            </div>
+          </div>
+          <span class="hint" id="add-site-status"></span>
+        </div>
+
         <button type="button" id="nuclear-btn" class="nuclear-btn">
           Nuclear — End Session Now
         </button>

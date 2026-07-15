@@ -13,6 +13,14 @@ const lockModeBadgeEl = document.getElementById("lock-mode-badge");
 const allowedSitesEl = document.getElementById("allowed-sites");
 const nuclearBtn = document.getElementById("nuclear-btn");
 
+const addSiteInput = document.getElementById("add-site-input");
+const addSiteBtn = document.getElementById("add-site-btn");
+const addSiteReasonRow = document.getElementById("add-site-reason-row");
+const addSiteReasonInput = document.getElementById("add-site-reason");
+const addSiteCancelBtn = document.getElementById("add-site-cancel-btn");
+const addSiteSubmitBtn = document.getElementById("add-site-submit-btn");
+const addSiteStatusEl = document.getElementById("add-site-status");
+
 const SAVED_WHITELIST_KEY = "savedDomainWhitelist";
 
 chrome.storage.local.get(SAVED_WHITELIST_KEY, (data) => {
@@ -103,9 +111,66 @@ nuclearBtn.addEventListener("click", () => {
   });
 });
 
+// Adding a site mid-session is a two-step flow: typing a domain and hitting
+// Add only reveals the reason box — nothing is sent to the desktop app until
+// a non-empty reason is submitted, so every addition has an audit trail.
+let pendingAddSiteDomain = null;
+
+function resetAddSiteForm() {
+  pendingAddSiteDomain = null;
+  addSiteReasonRow.classList.add("hidden");
+  addSiteBtn.disabled = false;
+  addSiteInput.disabled = false;
+  addSiteInput.value = "";
+  addSiteReasonInput.value = "";
+}
+
+addSiteBtn.addEventListener("click", () => {
+  const domain = addSiteInput.value.trim();
+  if (!domain) return;
+  pendingAddSiteDomain = domain;
+  addSiteReasonRow.classList.remove("hidden");
+  addSiteBtn.disabled = true;
+  addSiteInput.disabled = true;
+  addSiteReasonInput.value = "";
+  addSiteStatusEl.textContent = "";
+  addSiteReasonInput.focus();
+});
+
+addSiteCancelBtn.addEventListener("click", () => {
+  resetAddSiteForm();
+  addSiteStatusEl.textContent = "";
+});
+
+addSiteSubmitBtn.addEventListener("click", () => {
+  const reason = addSiteReasonInput.value.trim();
+  if (!pendingAddSiteDomain || !reason) {
+    addSiteStatusEl.textContent = "A reason is required.";
+    return;
+  }
+
+  const domain = pendingAddSiteDomain;
+  addSiteSubmitBtn.disabled = true;
+  chrome.runtime.sendMessage(
+    { type: "addWhitelistDomain", payload: { domain, reason } },
+    (response) => {
+      addSiteSubmitBtn.disabled = false;
+      if (response?.ok) {
+        addSiteStatusEl.textContent = `Added ${domain}.`;
+        resetAddSiteForm();
+        refreshStatus();
+      } else {
+        addSiteStatusEl.textContent = "Couldn't add site — desktop app unreachable.";
+      }
+    }
+  );
+});
+
 function showSetupView() {
   activeView.classList.add("hidden");
   setupView.classList.remove("hidden");
+  resetAddSiteForm();
+  addSiteStatusEl.textContent = "";
 }
 
 function showActiveView() {

@@ -366,6 +366,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "addWhitelistDomain") {
+    (async () => {
+      const { domain, reason } = message.payload || {};
+      if (!domain || !domain.trim() || !reason || !reason.trim()) {
+        sendResponse({ ok: false, error: "domain and reason are both required" });
+        return;
+      }
+      try {
+        const data = await apiFetch("/whitelist/domains/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ domain: domain.trim(), reason: reason.trim() }),
+        });
+        sendResponse({ ok: true, domainWhitelist: data.domainWhitelist });
+      } catch (err) {
+        console.warn("Focus Tracker: could not add domain to whitelist.", err);
+        sendResponse({ ok: false, error: String(err) });
+      }
+    })();
+    return true;
+  }
+
   if (message?.type === "getStatus") {
     (async () => {
       const session = await getSession();
