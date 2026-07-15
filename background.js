@@ -67,7 +67,7 @@ function isWhitelisted(url, whitelist) {
   });
 }
 
-// Hard lock needs somewhere safe to send the tab. If we haven't seen a
+// Hard lock needs somewhere safe to send the user. If we haven't seen a
 // whitelisted URL yet this session, fall back to the first whitelist entry
 // instead of doing nothing.
 function buildFallbackUrl(domainWhitelist) {
@@ -75,6 +75,40 @@ function buildFallbackUrl(domainWhitelist) {
   if (!first) return "";
   const trimmed = first.trim();
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
+// Hard lock never touches the offending tab's page — it just moves the
+// user's attention to a whitelisted one instead. Prefers an already-open
+// whitelisted tab; if none is open, opens the first whitelist entry in a
+// new tab. Either way, focuses that tab and its window.
+async function focusWhitelistedTab(offendingTabId, domainWhitelist) {
+  try {
+    const tabs = await chrome.tabs.query({});
+    let target = tabs.find(
+      (t) =>
+        t.id !== offendingTabId &&
+        t.url &&
+        /^https?:\/\//i.test(t.url) &&
+        isWhitelisted(t.url, domainWhitelist)
+    );
+
+    if (!target) {
+      const fallbackUrl = buildFallbackUrl(domainWhitelist);
+      if (!fallbackUrl) {
+        console.warn(
+          "Focus Tracker: hard lock triggered but domainWhitelist has no usable entries to open."
+        );
+        return;
+      }
+      target = await chrome.tabs.create({ url: fallbackUrl, active: true });
+    }
+
+    await chrome.tabs.update(target.id, { active: true });
+    await chrome.windows.update(target.windowId, { focused: true });
+    lastAcceptableUrl = target.url || buildFallbackUrl(domainWhitelist);
+  } catch (err) {
+    // Tab or window may no longer exist; ignore.
+  }
 }
 
 function formatTimeRemaining(endTime) {
@@ -196,19 +230,7 @@ async function handleTabUrl(tabId, url) {
   }
 
   if (session.lockMode === "hard") {
-    const redirectTarget = lastAcceptableUrl || buildFallbackUrl(session.domainWhitelist);
-    if (redirectTarget && redirectTarget !== url) {
-      try {
-        await chrome.tabs.update(tabId, { url: redirectTarget });
-        lastAcceptableUrl = redirectTarget;
-      } catch (err) {
-        // Tab may no longer exist; ignore.
-      }
-    } else if (!redirectTarget) {
-      console.warn(
-        "Focus Tracker: hard lock triggered but domainWhitelist has no usable entries to redirect to."
-      );
-    }
+    await focusWhitelistedTab(tabId, session.domainWhitelist);
     return;
   }
 
@@ -331,6 +353,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       await chrome.alarms.clear(ALARM_NAME);
       try {
         await apiFetch("/session/end", { method: "POST" });
+        await notifySessionComplete();
         sendResponse({ ok: true });
       } catch (err) {
         console.warn(
