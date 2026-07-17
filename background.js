@@ -378,7 +378,7 @@ async function handleTabUrl(tabId, url) {
           : null,
       });
 
-      try {
+      const switchAway = async () => {
         if (regulatedTab) {
           await chrome.tabs.update(regulatedTab.id, { active: true });
           if (regulatedTab.windowId !== currentTab.windowId) {
@@ -404,10 +404,21 @@ async function handleTabUrl(tabId, url) {
           });
           lastAcceptableUrl = fallback;
         }
+      };
+
+      try {
+        // A plain click on the tab also trips Chrome's "user may be
+        // dragging a tab" heuristic for a brief moment (mouse button down),
+        // not just an actual drag — so the switch-away itself needs the
+        // same retry treatment as the tab-close fallback below, instead of
+        // giving up after a single attempt. A real, sustained drag will
+        // still exhaust these retries and fall through to closing the tab;
+        // a click releases well within the retry window and just succeeds.
+        await withDragRetry(switchAway);
       } catch (err) {
         if (!isDragLockError(err)) throw err;
         console.log(
-          "Focus Tracker: switch-away blocked by an in-progress drag, closing the offending tab instead",
+          "Focus Tracker: switch-away still blocked after retries, closing the offending tab instead",
           { tabId }
         );
         await withDragRetry(() => chrome.tabs.remove(tabId));
