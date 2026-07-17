@@ -260,6 +260,18 @@ const lastHandledUrlByTab = new Map();
 const overlayDomainByTab = new Map();
 const activeTabByWindow = new Map();
 
+// Tracks tabs that currently have an unresolved (already-counted) violation
+// open. onActivated/onFocusChanged/onMoved/onAttached all clear
+// lastHandledUrlByTab to force hard/soft lock to re-enforce a tab that's
+// still sitting on a restricted page (e.g. re-switch-away after a drag
+// settles) — but re-running enforcement isn't a new violation, so counting
+// must be gated separately or every one of those re-checks (a redirect hop
+// landing on a second non-whitelisted URL, onMoved firing dozens of times
+// during a single tab drag, switching away and back) adds its own count for
+// what's really one continuous episode. Only cleared when the tab reaches a
+// whitelisted URL (paired with /violation/resolved) or closes.
+const openViolationTabs = new Set();
+
 function getHostname(url) {
   try {
     return new URL(url).hostname;
@@ -287,12 +299,16 @@ async function handleTabUrl(tabId, url) {
 
   if (whitelisted) {
     lastAcceptableUrl = url;
+    const hadOpenViolation = openViolationTabs.delete(tabId);
     // Browser-only sessions have no desktop app to tell — violation state
     // lives entirely in local storage for that mode.
     if (session.source === "browser-only") return;
     // The desktop app can't observe tab changes itself, so tell it whenever
     // the active tab goes from off-whitelist to on-whitelist, in case a
-    // domain violation was open and needs to be resolved.
+    // domain violation was open and needs to be resolved. Only bother if we
+    // actually had one open — an already-whitelisted tab re-evaluating
+    // (e.g. a drag settling) has nothing to resolve.
+    if (!hadOpenViolation) return;
     try {
       await apiFetch("/violation/resolved", {
         method: "POST",
@@ -311,20 +327,27 @@ async function handleTabUrl(tabId, url) {
   // Violation counting is owned by the desktop app; report it so /status's
   // violation_count reflects what actually happened in the browser. Browser-
   // only sessions have no desktop app to report to, so count locally instead.
-  if (session.source === "browser-only") {
-    const local = await getLocalSession();
-    if (local.isActive) {
-      await setLocalSession({ ...local, violationCount: (local.violationCount || 0) + 1 });
-    }
-  } else {
-    try {
-      await apiFetch("/violation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-    } catch (err) {
-      console.warn("Focus Tracker: could not report violation to desktop app.", err);
+  // Only count once per open violation episode — re-enforcement re-checks
+  // (drag settling, refocusing the window, a redirect hop that's still
+  // off-whitelist) land here too, but they're the same ongoing violation,
+  // not a new one.
+  if (!openViolationTabs.has(tabId)) {
+    openViolationTabs.add(tabId);
+    if (session.source === "browser-only") {
+      const local = await getLocalSession();
+      if (local.isActive) {
+        await setLocalSession({ ...local, violationCount: (local.violationCount || 0) + 1 });
+      }
+    } else {
+      try {
+        await apiFetch("/violation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        });
+      } catch (err) {
+        console.warn("Focus Tracker: could not report violation to desktop app.", err);
+      }
     }
   }
 
@@ -526,6 +549,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   lastHandledUrlByTab.delete(tabId);
   overlayDomainByTab.delete(tabId);
+  openViolationTabs.delete(tabId);
 });
 
 chrome.windows.onRemoved.addListener((windowId) => {
@@ -655,6 +679,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
 
         lastHandledUrlByTab.clear();
+        openViolationTabs.clear();
         const endTime =
           typeof data.secondsRemaining === "number"
             ? Date.now() + data.secondsRemaining * 1000
@@ -694,6 +719,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           violationCount: 0,
         });
         lastHandledUrlByTab.clear();
+        openViolationTabs.clear();
         await chrome.alarms.clear(ALARM_NAME);
         chrome.alarms.create(ALARM_NAME, { when: endTime });
         await recheckAllActiveTabs();
