@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Focus Tracker — Log</title>
+    <link rel="stylesheet" href="log.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="header">
+        <div class="logo-dot"></div>
+        <h1>Focus Tracker — Violation Log</h1>
+      </header>
+
+      <section id="current-section" class="hidden">
+        <h2>Current session</h2>
+        <p class="summary" id="current-summary"></p>
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>URL</th>
+              <th>Lock mode</th>
+              <th>Duration</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="current-log-body"></tbody>
+        </table>
+      </section>
+
+      <section id="history-section">
+        <h2>Past sessions</h2>
+        <div id="history-container"></div>
+      </section>
+    </div>
+
+    <script src="log.js"></script>
+  </body>
+</html>

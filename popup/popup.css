@@ -194,16 +194,42 @@ textarea#whitelist:focus {
   font-variant-numeric: tabular-nums;
 }
 
+.badge-row {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
 .lock-mode-badge {
   display: block;
   width: fit-content;
-  margin: 0 auto 16px;
   padding: 4px 12px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
+}
+
+.paused-badge {
+  background: #fff8e1;
+  color: #a86a00;
+}
+
+.pause-btn {
+  width: 100%;
+  margin-bottom: 18px;
+}
+
+.pause-btn.is-paused {
+  border-color: #a86a00;
+  color: #a86a00;
+}
+
+.pause-btn.is-paused:hover:not(:disabled) {
+  background: #a86a00;
+  color: #ffffff;
 }
 
 .lock-mode-badge.soft {
@@ -214,6 +240,29 @@ textarea#whitelist:focus {
 .lock-mode-badge.hard {
   background: #fff5f5;
   color: #c81e1e;
+}
+
+.violations-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.violations-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: #52606d;
+}
+
+.violations-count.has-violations {
+  color: #c81e1e;
+}
+
+#view-log-btn {
+  padding: 7px 12px;
+  font-size: 12px;
 }
 
 .allowed-sites {

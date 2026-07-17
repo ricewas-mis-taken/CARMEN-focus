@@ -10,8 +10,12 @@ const startBtn = document.getElementById("start-btn");
 
 const countdownEl = document.getElementById("countdown");
 const lockModeBadgeEl = document.getElementById("lock-mode-badge");
+const pausedBadgeEl = document.getElementById("paused-badge");
+const pauseBtn = document.getElementById("pause-btn");
 const allowedSitesEl = document.getElementById("allowed-sites");
 const nuclearBtn = document.getElementById("nuclear-btn");
+const violationsCountEl = document.getElementById("violations-count");
+const viewLogBtn = document.getElementById("view-log-btn");
 
 const addSiteInput = document.getElementById("add-site-input");
 const addSiteBtn = document.getElementById("add-site-btn");
@@ -101,6 +105,29 @@ startBtn.addEventListener("click", () => {
       }
     }
   );
+});
+
+pauseBtn.addEventListener("click", () => {
+  const willPause = !pauseBtn.classList.contains("is-paused");
+  pauseBtn.disabled = true;
+  chrome.runtime.sendMessage(
+    { type: willPause ? "pauseSession" : "resumeSession" },
+    (response) => {
+      pauseBtn.disabled = false;
+      if (response?.ok) {
+        refreshStatus();
+      } else {
+        pauseBtn.textContent = "Desktop app unreachable — try again";
+        setTimeout(() => {
+          pauseBtn.textContent = willPause ? "Pause Timer" : "Resume Timer";
+        }, 2500);
+      }
+    }
+  );
+});
+
+viewLogBtn.addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("log/log.html") });
 });
 
 nuclearBtn.addEventListener("click", () => {
@@ -222,7 +249,24 @@ function renderActiveSession(session) {
     li.textContent = site;
     allowedSitesEl.appendChild(li);
   });
-  startCountdown(session.endTime);
+
+  const violationCount = session.violationCount || 0;
+  violationsCountEl.textContent = `${violationCount} violation${violationCount === 1 ? "" : "s"}`;
+  violationsCountEl.classList.toggle("has-violations", violationCount > 0);
+
+  pausedBadgeEl.classList.toggle("hidden", !session.isPaused);
+  pauseBtn.classList.toggle("is-paused", !!session.isPaused);
+  pauseBtn.textContent = session.isPaused ? "Resume Timer" : "Pause Timer";
+
+  // While paused the desktop app freezes secondsRemaining, so stop ticking
+  // locally too — otherwise the displayed countdown would drift down between
+  // 3s status polls even though the real session clock isn't moving.
+  if (session.isPaused) {
+    stopCountdown();
+    countdownEl.textContent = formatCountdown(session.endTime - Date.now());
+  } else {
+    startCountdown(session.endTime);
+  }
 }
 
 function stopStatusPoll() {

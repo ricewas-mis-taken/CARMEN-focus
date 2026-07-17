@@ -68,7 +68,19 @@
 
         <div class="countdown" id="countdown">00:00</div>
 
-        <div class="lock-mode-badge" id="lock-mode-badge">Soft Lock</div>
+        <div class="badge-row">
+          <div class="lock-mode-badge" id="lock-mode-badge">Soft Lock</div>
+          <div class="lock-mode-badge paused-badge hidden" id="paused-badge">Paused</div>
+        </div>
+
+        <button type="button" id="pause-btn" class="secondary-btn pause-btn">
+          Pause Timer
+        </button>
+
+        <div class="violations-row">
+          <span class="violations-count" id="violations-count">0 violations</span>
+          <button type="button" id="view-log-btn" class="ghost-btn">View Full Log</button>
+        </div>
 
         <div class="field">
           <label>Allowed sites</label>
