@@ -153,6 +153,44 @@ async function withDragRetry(fn, attempts = 10, delayMs = 200) {
   }
 }
 
+// chrome.tabs.remove() can resolve without throwing yet not actually close
+// the tab — when a tab was torn off into its own window and is still being
+// tracked by an in-progress OS-level window drag, removing it out from
+// under that drag leaves the window itself behind as an orphaned, empty
+// shell that reads as "minimized" instead of gone. A clean resolve from
+// remove() isn't proof the tab is actually closed, so confirm it, and treat
+// "still there" as the same kind of transient drag-lock failure that
+// withDragRetry already knows how to retry.
+async function removeTabVerified(tabId) {
+  await chrome.tabs.remove(tabId);
+  try {
+    await chrome.tabs.get(tabId);
+  } catch (err) {
+    return; // Gone, as expected — chrome.tabs.get throws for a missing tab.
+  }
+  throw new Error("Tabs cannot be edited right now (user may be dragging a tab)");
+}
+
+// Last resort once every retry above is exhausted and the tab is still
+// sitting there: it's very likely the sole tab of a torn-off window stuck
+// mid-drag, so go one level up and close that window directly instead of
+// leaving it stranded on screen.
+async function forceCloseTab(tabId) {
+  try {
+    await withDragRetry(() => removeTabVerified(tabId));
+  } catch (err) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      await chrome.windows.remove(tab.windowId);
+    } catch (cleanupErr) {
+      console.error(
+        "Focus Tracker: could not force-close a stranded drag tab/window.",
+        cleanupErr
+      );
+    }
+  }
+}
+
 // A whitelist entry is either a bare domain ("docs.google.com") or a
 // domain-plus-path substring ("docs.google.com/document/d/xyz") — the
 // popup's own hint text says "one domain or URL substring per line", so
@@ -493,7 +531,7 @@ async function handleTabUrl(tabId, url) {
           "Focus Tracker: switch-away still blocked after retries, closing the offending tab instead",
           { tabId }
         );
-        await withDragRetry(() => chrome.tabs.remove(tabId));
+        await forceCloseTab(tabId);
       }
     } catch (err) {
       console.error("Focus Tracker: hard lock action failed.", err);
