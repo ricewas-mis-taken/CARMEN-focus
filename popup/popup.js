@@ -28,7 +28,10 @@ const addSiteCancelBtn = document.getElementById("add-site-cancel-btn");
 const addSiteSubmitBtn = document.getElementById("add-site-submit-btn");
 const addSiteStatusEl = document.getElementById("add-site-status");
 
+const reviewAdditionsBtn = document.getElementById("review-additions-btn");
+
 const SAVED_WHITELIST_KEY = "savedDomainWhitelist";
+const SESSION_ADDITIONS_KEY = "sessionAddedDomains";
 
 chrome.storage.local.get(SAVED_WHITELIST_KEY, (data) => {
   const saved = data[SAVED_WHITELIST_KEY];
@@ -36,6 +39,39 @@ chrome.storage.local.get(SAVED_WHITELIST_KEY, (data) => {
     whitelistTextarea.value = saved.join("\n");
   }
 });
+
+// "Add a site" mid-session only applies to that one session — it's never
+// written to SAVED_WHITELIST_KEY. Surface a button here (setup view only,
+// i.e. only once there's no session running) whenever the last session
+// added something that isn't already on the saved whitelist, so the user
+// can fold it in instead of retyping it.
+async function refreshReviewAdditionsButton() {
+  const data = await chrome.storage.local.get([SESSION_ADDITIONS_KEY, SAVED_WHITELIST_KEY]);
+  const additions = Array.isArray(data[SESSION_ADDITIONS_KEY]) ? data[SESSION_ADDITIONS_KEY] : [];
+  const saved = Array.isArray(data[SAVED_WHITELIST_KEY]) ? data[SAVED_WHITELIST_KEY] : [];
+  const savedSet = new Set(saved.map((d) => (d || "").trim().toLowerCase()));
+
+  const unsavedDomains = new Set(
+    additions
+      .map((entry) => (entry.domain || "").trim().toLowerCase())
+      .filter((domain) => domain && !savedSet.has(domain))
+  );
+
+  if (unsavedDomains.size === 0) {
+    reviewAdditionsBtn.classList.add("hidden");
+    return;
+  }
+  reviewAdditionsBtn.textContent = `Add ${unsavedDomains.size} site${
+    unsavedDomains.size === 1 ? "" : "s"
+  } from last session`;
+  reviewAdditionsBtn.classList.remove("hidden");
+}
+
+reviewAdditionsBtn.addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("additions/additions.html") });
+});
+
+refreshReviewAdditionsButton();
 
 let selectedMinutes = null;
 let selectedLockMode = "soft";
@@ -97,7 +133,7 @@ function armBrowserOnlyConfirm() {
   browserOnlyArmTimeout = setTimeout(disarmBrowserOnlyConfirm, BROWSER_ONLY_ARM_WINDOW_MS);
 }
 
-startBtn.addEventListener("click", () => {
+startBtn.addEventListener("click", async () => {
   const customValue = Number(customMinutesInput.value);
   const durationMinutes = customValue > 0 ? customValue : selectedMinutes;
 
@@ -129,7 +165,14 @@ startBtn.addEventListener("click", () => {
   // temporary per-session override (set directly via the desktop API, not
   // through this popup) and must never land here, or the next manual
   // session would silently start with someone else's event's sites.
-  chrome.storage.local.set({ [SAVED_WHITELIST_KEY]: domainWhitelist });
+  //
+  // Awaited deliberately: popups can be torn down the instant the user
+  // clicks away, which aborts any storage write still in flight. Without
+  // waiting for this to actually commit before doing anything else, an
+  // edit made right before hitting Start (e.g. deleting a domain) could
+  // silently fail to save, leaving the deleted domain back in the list the
+  // next time the popup opens.
+  await chrome.storage.local.set({ [SAVED_WHITELIST_KEY]: domainWhitelist });
 
   const browserOnly = awaitingBrowserOnlyConfirm;
 
@@ -254,6 +297,7 @@ function showSetupView() {
   resetAddSiteForm();
   addSiteStatusEl.textContent = "";
   disarmBrowserOnlyConfirm();
+  refreshReviewAdditionsButton();
 }
 
 function showActiveView() {

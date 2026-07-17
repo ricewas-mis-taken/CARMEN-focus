@@ -260,6 +260,11 @@ textarea#whitelist:focus {
   box-shadow: 0 6px 16px rgba(201, 130, 28, 0.35);
 }
 
+.review-additions-btn {
+  width: 100%;
+  margin-top: 10px;
+}
+
 .pause-btn {
   width: 100%;
   margin-bottom: 18px;

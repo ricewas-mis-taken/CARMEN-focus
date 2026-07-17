@@ -64,6 +64,23 @@ async function setLocalSession(session) {
   await chrome.storage.local.set({ [LOCAL_SESSION_KEY]: session });
 }
 
+// Sites added mid-session via "Add a site" only apply to that one session —
+// they're never written to SAVED_WHITELIST_KEY (popup.js's persisted
+// whitelist), so they're gone the moment the session ends unless the user
+// retypes them. Track them separately here so the popup can offer to fold
+// them into the saved whitelist once the session is over. Reset at the
+// start of each session (see startSession below) and left alone when a
+// session ends, so this always reflects "what got added during the most
+// recently started session" for the setup view to read back.
+const SESSION_ADDITIONS_KEY = "sessionAddedDomains";
+
+async function recordSessionAddition(domain, reason) {
+  const data = await chrome.storage.local.get(SESSION_ADDITIONS_KEY);
+  const additions = Array.isArray(data[SESSION_ADDITIONS_KEY]) ? data[SESSION_ADDITIONS_KEY] : [];
+  additions.push({ domain, reason, addedAt: Date.now() });
+  await chrome.storage.local.set({ [SESSION_ADDITIONS_KEY]: additions });
+}
+
 async function getSession() {
   try {
     const data = await apiFetch("/status", { method: "GET" });
@@ -206,27 +223,29 @@ function formatDurationSeconds(totalSeconds) {
 
 // Service workers have no Audio()/Web Audio API, so a completion chime has
 // to be played from an offscreen document instead — the only extension
-// context that has a DOM at all. chrome.offscreen only allows one document
-// to exist at a time, so treat "already exists" as success rather than an
-// error.
-async function ensureOffscreenDocument() {
+// context that has a DOM at all. The document plays its chime immediately
+// on load (see offscreen.js) rather than waiting for a runtime message, so
+// there's nothing that can race a not-yet-registered listener. Close any
+// previous document first (chrome.offscreen only allows one at a time) so
+// createDocument always yields a genuinely fresh, guaranteed-to-load
+// document instead of silently reusing a stale one from a prior call.
+async function playCompletionSound() {
   try {
+    try {
+      await chrome.offscreen.closeDocument();
+    } catch (err) {
+      // No existing document to close — fine, that's the common case.
+    }
     await chrome.offscreen.createDocument({
       url: "offscreen.html",
       reasons: ["AUDIO_PLAYBACK"],
       justification: "Play a completion chime when a focus session ends.",
     });
-  } catch (err) {
-    if (!/single offscreen document/i.test(err?.message || "")) {
-      throw err;
-    }
-  }
-}
-
-async function playCompletionSound() {
-  try {
-    await ensureOffscreenDocument();
-    await chrome.runtime.sendMessage({ type: "playCompletionSound" });
+    // Give the chime (~0.5s) time to finish before tearing the document
+    // back down.
+    setTimeout(() => {
+      chrome.offscreen.closeDocument().catch(() => {});
+    }, 1500);
   } catch (err) {
     console.warn("Focus Tracker: could not play completion sound.", err);
   }
@@ -712,6 +731,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         lastHandledUrlByTab.clear();
         openViolationTabs.clear();
+        await chrome.storage.local.set({ [SESSION_ADDITIONS_KEY]: [] });
         const endTime =
           typeof data.secondsRemaining === "number"
             ? Date.now() + data.secondsRemaining * 1000
@@ -752,6 +772,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
         lastHandledUrlByTab.clear();
         openViolationTabs.clear();
+        await chrome.storage.local.set({ [SESSION_ADDITIONS_KEY]: [] });
         await chrome.alarms.clear(ALARM_NAME);
         chrome.alarms.create(ALARM_NAME, { when: endTime });
         await recheckAllActiveTabs();
@@ -858,6 +879,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (local.isActive) {
         const updated = [...local.domainWhitelist, domain.trim()];
         await setLocalSession({ ...local, domainWhitelist: updated });
+        await recordSessionAddition(domain.trim(), reason.trim());
         await recheckAllActiveTabs();
         sendResponse({ ok: true, domainWhitelist: updated });
         return;
@@ -869,6 +891,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ domain: domain.trim(), reason: reason.trim() }),
         });
+        await recordSessionAddition(domain.trim(), reason.trim());
 
         // The domain just became allowed — clear a hard-lock switch-away or
         // soft-lock overlay from before the add immediately, instead of

@@ -1,14 +1,21 @@
-// Runs in an offscreen document (see background.js's ensureOffscreenDocument)
+// Runs in an offscreen document (see background.js's playCompletionSound)
 // because MV3 service workers have no Audio()/Web Audio API of their own —
 // this is the only context in the extension that can actually play a sound.
-
-chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type !== "playCompletionSound") return;
-  playChime();
-});
+//
+// This document exists solely to play one chime: background.js creates it
+// fresh for each completion and closes it again shortly after, so playback
+// happens immediately on script load rather than depending on a runtime
+// message reaching an onMessage listener that might not be registered yet
+// (a real race — sendMessage can look like it "succeeded" even if this
+// document's listener never actually got it, since background.js has its
+// own onMessage listener that would silently swallow the same message).
+playChime();
 
 function playChime() {
   const ctx = new AudioContext();
+  // Extension pages are normally exempt from autoplay restrictions, but
+  // resume() defensively in case a context ever starts "suspended".
+  ctx.resume().catch(() => {});
   const now = ctx.currentTime;
   // A short two-note "ding-dong" instead of one flat beep, so it reads as a
   // deliberate completion chime rather than an alert/error tone.

@@ -1,0 +1,89 @@
+.additions-list {
+  list-style: none;
+  margin: 0 0 20px;
+  padding: 0;
+}
+
+.addition-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  background: #ffffff;
+  border: 1px solid #d9e2e5;
+  border-radius: 10px;
+  margin-bottom: 8px;
+}
+
+.addition-row.already-saved {
+  opacity: 0.6;
+}
+
+.addition-row input[type="checkbox"] {
+  margin-top: 3px;
+  width: 15px;
+  height: 15px;
+  accent-color: #4fb0a5;
+}
+
+.addition-row .addition-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.addition-row .addition-domain {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1f2933;
+  word-break: break-all;
+}
+
+.addition-row .addition-reason {
+  font-size: 12px;
+  color: #7b8794;
+  margin-top: 2px;
+}
+
+.addition-row .addition-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #3f8f86;
+  white-space: nowrap;
+}
+
+.actions-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.primary-btn {
+  padding: 10px 16px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #4fb0a5, #3f8f86);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ghost-btn {
+  padding: 10px 16px;
+  border: 1px solid #d9e2e5;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #52606d;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.ghost-btn:hover {
+  background: #eef2f4;
+}

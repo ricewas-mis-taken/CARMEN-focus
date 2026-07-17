@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Focus Tracker — Add sites from last session</title>
+    <link rel="stylesheet" href="../log/log.css" />
+    <link rel="stylesheet" href="additions.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="header">
+        <div class="logo-dot"></div>
+        <h1>Sites added last session</h1>
+      </header>
+
+      <p class="summary">
+        These were added with "Add a site" during your last session, which only applies for
+        that one session. Pick which ones should stay on your saved whitelist for next time.
+      </p>
+
+      <div id="empty-state" class="hidden">
+        <p class="empty-state">No sites were added mid-session last time.</p>
+      </div>
+
+      <ul id="additions-list" class="additions-list"></ul>
+
+      <div id="actions-row" class="actions-row hidden">
+        <button type="button" id="add-selected-btn" class="primary-btn">
+          Add selected to saved whitelist
+        </button>
+        <button type="button" id="dismiss-btn" class="ghost-btn">Dismiss</button>
+      </div>
+
+      <p id="status-message" class="summary"></p>
+    </div>
+
+    <script src="additions.js"></script>
+  </body>
+</html>
