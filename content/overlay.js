@@ -4,7 +4,8 @@
   window.__focusTrackerOverlayInit = true;
 
   const OVERLAY_ID = "focus-tracker-overlay-root";
-  const GRACE_SECONDS = 5;
+  const BLACKOUT_ID = "focus-tracker-blackout-root";
+  const GRACE_SECONDS = 3;
 
   function showOverlay(timeRemainingText) {
     const existing = document.getElementById(OVERLAY_ID);
@@ -90,9 +91,37 @@
     }, GRACE_SECONDS * 1000);
   }
 
+  // Hard lock's emergency cover: shown the moment Chrome's "user may be
+  // dragging a tab" lock blocks a switch-away/close, so restricted content
+  // stays hidden for as long as the hold lasts instead of just sitting there
+  // while background.js retries. No timer, no dismiss — only removed by an
+  // explicit hideBlackout message (or the tab closing, which ends this
+  // script entirely).
+  function showBlackout() {
+    if (document.getElementById(BLACKOUT_ID)) return;
+    const root = document.createElement("div");
+    root.id = BLACKOUT_ID;
+    root.style.cssText = `
+      position: fixed;
+      inset: 0;
+      z-index: 2147483647;
+      background: #14181c;
+    `;
+    document.documentElement.appendChild(root);
+  }
+
+  function hideBlackout() {
+    const existing = document.getElementById(BLACKOUT_ID);
+    if (existing) existing.remove();
+  }
+
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === "showOverlay") {
       showOverlay(message.timeRemainingText);
+    } else if (message?.type === "showBlackout") {
+      showBlackout();
+    } else if (message?.type === "hideBlackout") {
+      hideBlackout();
     }
   });
 })();

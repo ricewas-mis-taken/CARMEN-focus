@@ -171,6 +171,22 @@ async function removeTabVerified(tabId) {
   throw new Error("Tabs cannot be edited right now (user may be dragging a tab)");
 }
 
+// Same "resolved but not actually gone" gap as removeTabVerified, one level
+// up: chrome.windows.remove() can also get rejected (or silently not take)
+// while the drag lock is held, and an interrupted drag on a torn-off window
+// is exactly what Windows tends to leave as a stray *minimized* window
+// instead of removing it — so this needs the same verify-and-retry treatment
+// as the tab-level removal, not a single unguarded attempt.
+async function removeWindowVerified(windowId) {
+  await chrome.windows.remove(windowId);
+  try {
+    await chrome.windows.get(windowId);
+  } catch (err) {
+    return; // Gone, as expected — chrome.windows.get throws for a missing window.
+  }
+  throw new Error("Tabs cannot be edited right now (user may be dragging a tab)");
+}
+
 // Last resort once every retry above is exhausted and the tab is still
 // sitting there: it's very likely the sole tab of a torn-off window stuck
 // mid-drag, so go one level up and close that window directly instead of
@@ -181,7 +197,7 @@ async function forceCloseTab(tabId) {
   } catch (err) {
     try {
       const tab = await chrome.tabs.get(tabId);
-      await chrome.windows.remove(tab.windowId);
+      await withDragRetry(() => removeWindowVerified(tab.windowId));
     } catch (cleanupErr) {
       console.error(
         "Focus Tracker: could not force-close a stranded drag tab/window.",
@@ -516,6 +532,37 @@ async function handleTabUrl(tabId, url) {
         }
       };
 
+      // A plain click also trips the drag lock on its first attempt (see
+      // the withDragRetry comment below) and clears on the very next retry
+      // — so blackout can't arm on the first failure or it would flash on
+      // every ordinary click. Only a hold keeps failing past that, so arm
+      // it after a few consecutive failures (~600ms), which a click never
+      // reaches but a sustained hold does.
+      const BLACKOUT_AFTER_FAILURES = 3;
+      let consecutiveFailures = 0;
+      let blackoutShown = false;
+      const ensureBlackout = async () => {
+        if (blackoutShown) return;
+        blackoutShown = true;
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            files: ["content/overlay.js"],
+          });
+          await chrome.tabs.sendMessage(tabId, { type: "showBlackout" });
+        } catch (err) {
+          // Tab may not support script injection (e.g. chrome:// pages); ignore.
+        }
+      };
+      const clearBlackout = async () => {
+        if (!blackoutShown) return;
+        try {
+          await chrome.tabs.sendMessage(tabId, { type: "hideBlackout" });
+        } catch (err) {
+          // Tab already gone or never had it injected; ignore.
+        }
+      };
+
       try {
         // A plain click on the tab also trips Chrome's "user may be
         // dragging a tab" heuristic for a brief moment (mouse button down),
@@ -524,7 +571,19 @@ async function handleTabUrl(tabId, url) {
         // giving up after a single attempt. A real, sustained drag will
         // still exhaust these retries and fall through to closing the tab;
         // a click releases well within the retry window and just succeeds.
-        await withDragRetry(switchAway);
+        await withDragRetry(async () => {
+          try {
+            await switchAway();
+            consecutiveFailures = 0;
+            await clearBlackout();
+          } catch (err) {
+            if (isDragLockError(err)) {
+              consecutiveFailures++;
+              if (consecutiveFailures >= BLACKOUT_AFTER_FAILURES) await ensureBlackout();
+            }
+            throw err;
+          }
+        });
       } catch (err) {
         if (!isDragLockError(err)) throw err;
         console.log(
