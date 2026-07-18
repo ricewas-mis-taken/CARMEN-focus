@@ -74,11 +74,30 @@ async function setLocalSession(session) {
 // recently started session" for the setup view to read back.
 const SESSION_ADDITIONS_KEY = "sessionAddedDomains";
 
+// chrome.storage.local has no read-modify-write primitive, so two
+// "addWhitelistDomain" messages handled concurrently (e.g. the popup was
+// closed and reopened mid-request, so the second add isn't actually waiting
+// on the first) can both read the same starting array/object before either
+// write lands, and whichever set() resolves last silently clobbers the
+// other's addition. Route every read-modify-write against session/whitelist
+// storage through this single queue so they're never interleaved.
+let storageQueue = Promise.resolve();
+function withStorageLock(fn) {
+  const result = storageQueue.then(fn, fn);
+  storageQueue = result.then(
+    () => {},
+    () => {}
+  );
+  return result;
+}
+
 async function recordSessionAddition(domain, reason) {
-  const data = await chrome.storage.local.get(SESSION_ADDITIONS_KEY);
-  const additions = Array.isArray(data[SESSION_ADDITIONS_KEY]) ? data[SESSION_ADDITIONS_KEY] : [];
-  additions.push({ domain, reason, addedAt: Date.now() });
-  await chrome.storage.local.set({ [SESSION_ADDITIONS_KEY]: additions });
+  return withStorageLock(async () => {
+    const data = await chrome.storage.local.get(SESSION_ADDITIONS_KEY);
+    const additions = Array.isArray(data[SESSION_ADDITIONS_KEY]) ? data[SESSION_ADDITIONS_KEY] : [];
+    additions.push({ domain, reason, addedAt: Date.now() });
+    await chrome.storage.local.set({ [SESSION_ADDITIONS_KEY]: additions });
+  });
 }
 
 async function getSession() {
@@ -220,6 +239,19 @@ async function forceCloseTab(tabId) {
 // domains are matched against the hostname only (exact or subdomain);
 // path-scoped entries are matched against origin+pathname, which excludes
 // the attacker/self-controllable query string and hash.
+// A handful of well-known services are commonly typed as one domain but
+// actually served from another (Gmail is "gmail.com" in every user's head
+// but its pages live on mail.google.com) — bare-domain matching alone can
+// never bridge that since neither is a subdomain of the other. Each group
+// here is treated as mutually interchangeable: whitelisting any member
+// whitelists the hostname (and its subdomains) of every other member too.
+const DOMAIN_EQUIVALENTS = [["gmail.com", "mail.google.com"]];
+
+function equivalentHostnames(domain) {
+  const group = DOMAIN_EQUIVALENTS.find((g) => g.includes(domain));
+  return group || [domain];
+}
+
 function isWhitelisted(url, whitelist) {
   if (!url) return true;
   if (!whitelist || whitelist.length === 0) return false;
@@ -238,7 +270,9 @@ function isWhitelisted(url, whitelist) {
     if (!trimmed) return false;
     const withoutProtocol = trimmed.replace(/^https?:\/\//, "");
     if (!withoutProtocol.includes("/")) {
-      return hostname === withoutProtocol || hostname.endsWith(`.${withoutProtocol}`);
+      return equivalentHostnames(withoutProtocol).some(
+        (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
+      );
     }
     return originAndPath.includes(withoutProtocol);
   });
@@ -755,15 +789,22 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       await notifyLocalSessionComplete(local);
       return;
     }
+    // The popup's own 3s status poll can beat this alarm to the punch and
+    // self-finalize the session server-side first (see the comment on
+    // notifySessionComplete) — when that happens, /session/end 404s/errors
+    // here since there's nothing left to end. That's not a reason to skip
+    // the notification: /history has the finalized entry either way, so
+    // always try to notify regardless of whether our own /session/end call
+    // succeeded.
     try {
       await apiFetch("/session/end", { method: "POST" });
-      await notifySessionComplete();
     } catch (err) {
       console.warn(
-        "Focus Tracker: could not reach desktop app to end session.",
+        "Focus Tracker: could not reach desktop app to end session (it may have already self-finalized).",
         err
       );
     }
+    await notifySessionComplete();
   }
 });
 
@@ -974,8 +1015,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       const local = await getLocalSession();
       if (local.isActive) {
-        const updated = [...local.domainWhitelist, domain.trim()];
-        await setLocalSession({ ...local, domainWhitelist: updated });
+        const updated = await withStorageLock(async () => {
+          const current = await getLocalSession();
+          const updatedList = [...current.domainWhitelist, domain.trim()];
+          await setLocalSession({ ...current, domainWhitelist: updatedList });
+          return updatedList;
+        });
         await recordSessionAddition(domain.trim(), reason.trim());
         await recheckAllActiveTabs();
         sendResponse({ ok: true, domainWhitelist: updated });
